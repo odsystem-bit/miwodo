@@ -1,0 +1,26 @@
+# ─── Routing API MIWODO ─────────────────────────────────────────────────────
+# Redirige /api/initiate → /api/initiate.php, etc.
+
+RewriteEngine On
+
+# CORS preflight
+RewriteCond %{REQUEST_METHOD} OPTIONS
+RewriteRule ^(.*)$ $1 [QSA,L]
+
+# Routing propre: /initiate → initiate.php
+RewriteRule ^initiate$ initiate.php [L,QSA]
+RewriteRule ^verify$ verify.php [L,QSA]
+RewriteRule ^webhook$ webhook.php [L,QSA]
+RewriteRule ^upload$ upload.php [L,QSA]
+RewriteRule ^delete$ delete.php [L,QSA]
+
+# Sécurité — bloquer l'accès direct aux fichiers sensibles
+<FilesMatch "^(config|\.env)">
+    Require all denied
+</FilesMatch>
+
+# Désactiver l'indexation
+Options -Indexes
+
+# Charset par défaut
+AddDefaultCharset UTF-8

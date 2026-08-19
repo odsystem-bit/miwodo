@@ -1,0 +1,362 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.actif == true;
+    }
+
+    function isSuperAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'super_admin'
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.actif == true;
+    }
+    
+    function onlyUpdating(fields) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(fields);
+    }
+
+    function isConversationParticipant(convId) {
+      return request.auth != null
+        && (convId.matches(request.auth.uid + '_.*')
+           || convId.matches('.*_' + request.auth.uid));
+    }
+
+    // Vérifie si l'ID de conversation contient un ID invité (guest_xxx)
+    function isGuestConversation(convId) {
+      return convId.matches('guest_.*') || convId.matches('.*_guest_.*');
+    }
+
+    // Vérifie si l'utilisateur est le prestataire concerné par une conversation invité
+    function isPrestataireInGuestConv(convId) {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/conversations/$(convId))
+        && get(/databases/$(database)/documents/conversations/$(convId)).data.prestataireId == request.auth.uid;
+    }
+
+    // ─── Validation helpers ───────────────────────────────────────────
+    // Vérifie qu'une chaîne est dans une taille limite
+    function isValidString(value, minLen, maxLen) {
+      return value is string
+        && value.size() >= minLen
+        && value.size() <= maxLen;
+    }
+
+    // Vérifie qu'un nombre est dans une plage
+    function isValidNumber(value, min, max) {
+      return value is number
+        && value >= min
+        && value <= max;
+    }
+
+    // Vérifie qu'un email a un format basique
+    function isValidEmail(value) {
+      return value is string
+        && value.matches('^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$');
+    }
+
+    // Vérifie qu'un tableau a une taille limite
+    function isValidList(value, maxItems) {
+      return value is list
+        && value.size() <= maxItems;
+    }
+
+    // Limite le nombre de champs d'un document
+    function hasValidSize(maxBytes) {
+      return request.resource.data.size() <= maxBytes;
+    }
+
+    // Prestataires : lecture publique, écriture par le propriétaire ou un admin actif
+    match /prestataires/{uid} {
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.auth.uid == uid
+        // Validations
+        && isValidString(request.resource.data.nom, 2, 100)
+        && isValidString(request.resource.data.prenom, 2, 100)
+        && isValidString(request.resource.data.telephone, 6, 20)
+        && request.resource.data.categorie is string
+        && hasValidSize(5000);
+      allow update: if request.auth != null
+        && (request.auth.uid == uid || isAdmin())
+        && hasValidSize(5000);
+      allow delete: if request.auth != null && isAdmin();
+    }
+
+    // Services : lecture publique, écriture par le prestataire propriétaire ou admin
+    match /services/{serviceId} {
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.resource.data.prestataireId == request.auth.uid
+        // Validations alignées sur le modèle ServicePrestataire
+        && isValidString(request.resource.data.nom, 2, 200)
+        && (request.resource.data.description == null || isValidString(request.resource.data.description, 0, 2000))
+        && (request.resource.data.prixMin == null || isValidNumber(request.resource.data.prixMin, 0, 10000000))
+        && (request.resource.data.prixMax == null || isValidNumber(request.resource.data.prixMax, 0, 10000000))
+        && (request.resource.data.prixMin == null || request.resource.data.prixMax == null || request.resource.data.prixMin <= request.resource.data.prixMax)
+        && (request.resource.data.unite == null || request.resource.data.unite is string)
+        && (request.resource.data.dureeEstimee == null || isValidString(request.resource.data.dureeEstimee, 0, 100))
+        && isValidList(request.resource.data.images, 10)
+        && hasValidSize(10000);
+      allow update: if request.auth != null
+        && (request.auth.uid == resource.data.prestataireId || isAdmin())
+        && hasValidSize(10000);
+      allow delete: if request.auth != null
+        && (request.auth.uid == resource.data.prestataireId || isAdmin());
+    }
+
+    // Produits : lecture publique, écriture par le vendeur propriétaire ou admin
+    match /produits/{produitId} {
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.resource.data.prestataireId == request.auth.uid
+        // Validations
+        && isValidString(request.resource.data.nom, 2, 200)
+        && (!request.resource.data.keys().hasAll(['description']) || request.resource.data.description == null || isValidString(request.resource.data.description, 0, 2000))
+        && isValidNumber(request.resource.data.prix, 0, 10000000)
+        && (!request.resource.data.keys().hasAll(['stock']) || request.resource.data.stock == null || request.resource.data.stock is int || request.resource.data.stock is number)
+        && hasValidSize(20000);
+      allow update: if request.auth != null
+        && (request.auth.uid == resource.data.prestataireId || isAdmin())
+        && hasValidSize(20000);
+      allow delete: if request.auth != null
+        && (request.auth.uid == resource.data.prestataireId || isAdmin());
+    }
+
+    // Commandes vendeur : création par utilisateur authentifié ou invité,
+    // lecture/update par le client, vendeur ou livreur concerné, ou admin
+    match /commandes/{commandeId} {
+      allow create: if request.auth != null
+        // Validations
+        && isValidString(request.resource.data.client_uid, 10, 128)
+        && isValidString(request.resource.data.vendeur_id, 10, 128)
+        && isValidNumber(request.resource.data.total_client, 0, 10000000)
+        && request.resource.data.statut is string
+        && hasValidSize(10000);
+      
+      allow read: if request.auth != null
+        && (request.auth.uid == resource.data.client_uid
+         || request.auth.uid == resource.data.vendeur_id
+         || request.auth.uid == resource.data.livreur_id
+         || isAdmin());
+      
+      allow update: if request.auth != null
+        && (
+          (request.auth.uid == resource.data.client_uid
+            && onlyUpdating(['confirmation_client', 'confirmation_client_at', 'statut', 'litige_description', 'litige_created_at']))
+          || (request.auth.uid == resource.data.vendeur_id
+            && onlyUpdating(['statut', 'livreur_id', 'livreur_assigne_at', 'photo_preuve_url', 'notes_vendeur']))
+          || (request.auth.uid == resource.data.livreur_id
+            && onlyUpdating(['statut', 'accepted_at', 'en_route_at', 'livre_at', 'confirmation_livreur', 'confirmation_livreur_at', 'force_par_livreur', 'force_at', 'force_raison', 'photo_preuve_url', 'livreurs_refuses']))
+          || (resource.data.statut == 'paye'
+            && onlyUpdating(['livreurs_refuses']))
+          || isAdmin()
+        );
+    }
+    
+    // Soldes vendeurs/livreurs : lecture par le propriétaire, update limité par le propriétaire et admin
+    match /soldes_vendeurs/{userId} {
+      allow read: if request.auth != null && (request.auth.uid == userId || isAdmin());
+      allow create: if request.auth != null && request.auth.uid == userId;
+      allow update: if request.auth != null && (request.auth.uid == userId || isAdmin());
+      allow delete: if false;
+    }
+
+    // Demandes de retrait : création par le prestataire, lecture par le propriétaire ou admin, update par admin
+    match /demandes_retrait/{retraitId} {
+      allow read: if request.auth != null
+        && (request.auth.uid == resource.data.prestataire_id || isAdmin());
+      allow create: if request.auth != null
+        && request.resource.data.prestataire_id == request.auth.uid
+        && isValidNumber(request.resource.data.montant, 1, 10000000)
+        && request.resource.data.source is string
+        && request.resource.data.methode_paiement is string
+        && request.resource.data.statut is string
+        && isValidString(request.resource.data.numero_destinataire, 4, 50)
+        && hasValidSize(5000);
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+    
+    // Zones Miwodo : lecture publique, écriture admin
+    match /zones_miwodo/{zoneId} {
+      allow read: if true;
+      allow write: if request.auth != null && isAdmin();
+    }
+    
+    // Notifications : lecture/update par le destinataire, création par utilisateur authentifié
+    match /notifications/{notifId} {
+      allow read, update: if request.auth != null && request.auth.uid == resource.data.userId;
+      allow create: if request.auth != null
+        && isValidString(request.resource.data.userId, 10, 128)
+        && isValidString(request.resource.data.title, 1, 200)
+        && isValidString(request.resource.data.body, 0, 500)
+        && request.resource.data.type is string
+        && hasValidSize(3000);
+      allow delete: if request.auth != null && request.auth.uid == resource.data.userId;
+    }
+    
+    // Rate limits : accès Cloud Functions uniquement
+    match /rate_limits/{docId} {
+      allow read, write: if false;
+    }
+
+    // Config pays : lecture publique, écriture super_admin
+    match /config/pays {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    // Autre config : lecture publique, écriture super_admin
+    match /config/{document} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    // Avis : lecture publique, création authentifiée, pas de modification côté client
+    match /avis/{avisId} {
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.resource.data.prestataireId != request.auth.uid
+        // Validations
+        && isValidString(request.resource.data.prestataireId, 10, 128)
+        && isValidNumber(request.resource.data.note, 1, 5)
+        && (request.resource.data.commentaire == null || isValidString(request.resource.data.commentaire, 0, 1000))
+        && hasValidSize(3000);
+      allow update, delete: if false;
+    }
+
+    // Vérifie si l'utilisateur est dans le tableau participants
+    function isParticipantInArray(convId) {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/conversations/$(convId))
+        && get(/databases/$(database)/documents/conversations/$(convId)).data.participants is list
+        && get(/databases/$(database)/documents/conversations/$(convId)).data.participants.hasAny([request.auth.uid]);
+    }
+
+    // Conversations : lecture/écriture pour les participants ou invités
+    match /conversations/{conversationId} {
+      // Lecture : participant authentifié (via ID ou participants array) OU prestataire concerné par une conv invité
+      allow read: if (request.auth != null && isConversationParticipant(conversationId))
+        || (request.auth != null && resource.data.participants is list && resource.data.participants.hasAny([request.auth.uid]))
+        || isPrestataireInGuestConv(conversationId);
+      
+      // Création : participant authentifié OU création publique pour invités (isGuestConversation)
+      allow create: if (request.auth != null && isConversationParticipant(conversationId))
+        || (isGuestConversation(conversationId) && request.resource.data.isGuestConversation == true);
+      
+      // Mise à jour : participant authentifié ou prestataire concerné
+      allow update: if (request.auth != null && isConversationParticipant(conversationId)
+        && onlyUpdating(['lastMessageLu', 'dernierMessage', 'dernierMessageDate', 'dernierExpediteurId']))
+        || (isPrestataireInGuestConv(conversationId)
+          && onlyUpdating(['lastMessageLu', 'dernierMessage', 'dernierMessageDate', 'dernierExpediteurId']));
+
+      // Messages d'une conversation
+      match /messages/{messageId} {
+        // Lecture : participant authentifié ou prestataire concerné
+        allow read: if (request.auth != null && isConversationParticipant(conversationId))
+          || isPrestataireInGuestConv(conversationId);
+        
+        // Création : participant authentifié OU invité (isGuest=true dans le message)
+        allow create: if (request.auth != null && isConversationParticipant(conversationId)
+          && request.resource.data.expediteurId == request.auth.uid
+          // Validation: contenu non vide et taille limitée
+          && isValidString(request.resource.data.contenu, 1, 5000))
+          || (isGuestConversation(conversationId)
+            && request.resource.data.isGuest == true
+            && isValidString(request.resource.data.contenu, 1, 5000));
+        
+        allow update, delete: if false;
+      }
+    }
+
+    // Admins : documents de rôles d'administration
+    match /admins/{uid} {
+      allow read: if isAdmin();
+      allow create, update, delete: if isSuperAdmin()
+        // Validation: role valide
+        && (request.resource.data.role is string
+          && (request.resource.data.role == 'super_admin' || request.resource.data.role == 'moderateur'))
+        && request.resource.data.actif is bool
+        && request.resource.data.email is string;
+    }
+
+    // Signalements : création par utilisateur authentifié, lecture/update par admins actifs
+    match /signalements/{id} {
+      allow create: if request.auth != null
+        // Validations
+        && isValidString(request.resource.data.cibleId, 5, 128)
+        && request.resource.data.raison is string
+        && isValidString(request.resource.data.raison, 5, 1000)
+        && hasValidSize(5000);
+      allow read, update: if isAdmin();
+    }
+
+    // Transactions : lecture par admin, création par utilisateurs authentifiés
+    match /transactions/{id} {
+      allow read: if isAdmin();
+      allow create: if request.auth != null
+        && request.resource.data.paymentId is string
+        && request.resource.data.type is string
+        && request.resource.data.montant is number
+        && request.resource.data.createdAt is timestamp;
+      allow update, delete: if false;
+    }
+
+    // Publicités / mises en avant : lecture publique, écriture admin ou propriétaire
+    match /publicites/{id} {
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.resource.data.prestataireId == request.auth.uid
+        // Validations
+        && isValidString(request.resource.data.plan, 3, 50)
+        && isValidNumber(request.resource.data.montant, 0, 10000000)
+        && hasValidSize(5000);
+      allow update, delete: if request.auth != null
+        && (request.auth.uid == resource.data.prestataireId || isAdmin());
+    }
+
+    // Parrainages : lecture par le propriétaire, écriture Cloud Functions uniquement
+    match /parrainages/{id} {
+      allow read: if request.auth != null && request.auth.uid == resource.data.userId;
+      allow write: if false;
+    }
+
+    // Sponsoring campaigns : lecture par le prestataire propriétaire ou admin, création par prestataire, update par admin
+    match /sponsoring_campaigns/{campaignId} {
+      allow read: if request.auth != null
+        && (request.auth.uid == resource.data.prestataireId || isAdmin());
+      allow create: if request.auth != null
+        && request.resource.data.prestataireId == request.auth.uid
+        && isValidString(request.resource.data.serviceId, 10, 128)
+        && isValidString(request.resource.data.serviceName, 1, 200)
+        && request.resource.data.plan is string
+        && request.resource.data.statut is string
+        && isValidNumber(request.resource.data.montant, 0, 10000000)
+        && hasValidSize(5000);
+      allow update: if request.auth != null && isAdmin();
+      allow delete: if request.auth != null && isAdmin();
+    }
+
+    // FCM tokens : lecture/écriture par le propriétaire du token uniquement
+    match /fcm_tokens/{tokenId} {
+      allow read: if request.auth != null && request.auth.uid == resource.data.userId;
+      allow create: if request.auth != null
+        && request.resource.data.userId == request.auth.uid
+        && isValidString(request.resource.data.token, 20, 500)
+        && hasValidSize(2000);
+      allow update: if request.auth != null && request.auth.uid == resource.data.userId;
+      allow delete: if request.auth != null && request.auth.uid == resource.data.userId;
+    }
+
+    // Sponsoring validation logs : lecture par admin uniquement, écriture par Cloud Functions
+    match /sponsoring_validation_logs/{logId} {
+      allow read: if request.auth != null && isAdmin();
+      allow write: if false;
+    }
+  }
+}
