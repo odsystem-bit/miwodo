@@ -3,7 +3,7 @@ stages:
 
 build_apk:
   stage: build
-  image: ghcr.io/cirruslabs/flutter:3.47.0
+  image: flutter:stable
   before_script:
     - flutter pub get
   script:
