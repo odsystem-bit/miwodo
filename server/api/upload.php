@@ -33,16 +33,22 @@ $path = str_replace('..', '', $path);
 $path = ltrim($path, '/');
 
 // Vérifier le type de fichier
-$allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+$allowedMimes = [
+    'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+    'video/mp4', 'video/quicktime', 'video/x-msvideo',
+    'audio/mpeg', 'audio/mp4', 'audio/m4a', 'audio/x-m4a', 'audio/aac'
+];
 $mimeType = mime_content_type($file['tmp_name']);
 if (!in_array($mimeType, $allowedMimes)) {
     errorResponse("Type de fichier non autorisé: $mimeType", 400);
 }
 
-// Vérifier la taille (max 10 MB)
-$maxSize = 10 * 1024 * 1024;
+// Vérifier la taille (max 50 MB pour vidéos, 10 MB pour images/audio)
+$isVideo = str_starts_with($mimeType, 'video/');
+$maxSize = $isVideo ? 50 * 1024 * 1024 : 10 * 1024 * 1024;
 if ($file['size'] > $maxSize) {
-    errorResponse('Fichier trop volumineux (max 10 MB)', 400);
+    $maxMB = $maxSize / (1024 * 1024);
+    errorResponse("Fichier trop volumineux (max {$maxMB} MB)", 400);
 }
 
 // Vérifier les erreurs d'upload

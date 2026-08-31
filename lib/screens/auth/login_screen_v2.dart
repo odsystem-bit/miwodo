@@ -1,13 +1,14 @@
 // screens/auth/login_screen_v2.dart
 // Premium login screen - Senior Dev Level
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/theme/app_radius.dart';
-import '../../core/theme/app_shadows.dart';
 import '../../core/theme/app_typography.dart';
 import '../../services/auth_service.dart';
+import '../../services/firebase_service.dart';
 import '../../widgets/animated_button.dart';
 import '../../widgets/glass_card.dart';
 import '../../widgets/miwodo_svg_icon.dart';
@@ -92,17 +93,36 @@ class _LoginScreenV2State extends ConsumerState<LoginScreenV2>
       return;
     }
 
-    // Les comptes sont crees avec un vrai email a l'inscription.
-    // Si l'utilisateur saisit un email, on l'utilise directement.
-    // Sinon (numero de telephone) on le convertit au format @miwodo.app.
-    final email = identifier.contains('@')
-        ? identifier
-        : '${identifier.replaceAll(RegExp(r'[^0-9]'), '')}@miwodo.app';
-
     ref.read(loginLoadingProvider.notifier).state = true;
     ref.read(loginErrorProvider.notifier).state = null;
 
     try {
+      String email;
+      
+      if (identifier.contains('@')) {
+        // L'utilisateur a saisi un email directement
+        email = identifier;
+      } else {
+        // L'utilisateur a saisi un numéro de téléphone
+        // Chercher le prestataire par téléphone pour récupérer son email
+        final phone = identifier.replaceAll(RegExp(r'[^0-9]'), '');
+        final snap = await FirebaseService.instance.firestore
+            .collection('prestataires')
+            .where('telephone', isEqualTo: phone)
+            .limit(1)
+            .get();
+        
+        if (snap.docs.isNotEmpty) {
+          final data = snap.docs.first.data();
+          email = data['email'] as String? ?? '$phone@miwodo.app';
+          if (kDebugMode) print('[Login] Found prestataire email: $email');
+        } else {
+          // Fallback: essayer avec le format @miwodo.app
+          email = '$phone@miwodo.app';
+          if (kDebugMode) print('[Login] No prestataire found, using fallback: $email');
+        }
+      }
+
       final userCred = await AuthService.instance.signInWithEmail(email, password, rememberMe: _rememberMe);
       final adminRole = await AuthService.instance.getAdminRole(userCred.user!.uid);
       AuthService.instance.setAdminRole(adminRole);

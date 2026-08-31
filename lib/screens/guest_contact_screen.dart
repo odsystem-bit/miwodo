@@ -2,6 +2,7 @@
 // Écran pour permettre aux invités (non connectés) de contacter un prestataire
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -10,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/theme/app_colors.dart';
 import '../models/prestataire.dart';
+import '../services/message_api_service.dart';
 import '../widgets/miwodo_button.dart';
 import '../widgets/miwodo_svg_icon.dart';
 
@@ -109,34 +111,41 @@ class _GuestContactScreenState extends ConsumerState<GuestContactScreen> {
       final guestPhone = _phoneController.text.trim();
       final messageText = _messageController.text.trim();
 
-      final convRef = FirebaseFirestore.instance.collection('conversations').doc(conversationId);
+      // 1. Envoyer le message vers MySQL
+      await MessageApiService.instance.sendMessage(
+        conversationId: conversationId,
+        expediteurId: guestId,
+        destinataireId: widget.prestataireId,
+        contenu: messageText,
+        type: 'text',
+        isGuest: true,
+        guestName: guestName,
+        guestPhone: guestPhone,
+      );
 
-      // Créer ou mettre à jour la conversation
-      await convRef.set({
-        'participants': [guestId, widget.prestataireId],
-        'guestId': guestId,
-        'guestName': guestName,
-        'guestPhone': guestPhone,
-        'prestataireId': widget.prestataireId,
-        'dernierMessage': messageText,
-        'dernierMessageDate': FieldValue.serverTimestamp(),
-        'dernierExpediteurId': guestId,
-        'lastMessageLu': false,
-        'isGuestConversation': true,
-      }, SetOptions(merge: true));
+      // 2. Notifier le prestataire (MySQL)
+      try {
+        await MessageApiService.instance.createNotification(
+          userId: widget.prestataireId,
+          title: guestName.isEmpty ? 'Invité' : guestName,
+          body: messageText,
+          type: 'message',
+          targetId: conversationId,
+        );
+      } catch (e) {
+        if (kDebugMode) print('[GuestContact] Notification error: $e');
+      }
 
-      // Ajouter le message
-      await convRef.collection('messages').add({
-        'expediteurId': guestId,
-        'destinataireId': widget.prestataireId,
-        'contenu': messageText,
-        'type': 'text',
-        'estLu': false,
-        'creeLe': FieldValue.serverTimestamp(),
-        'guestName': guestName,
-        'guestPhone': guestPhone,
-        'isGuest': true,
-      });
+      // 3. Sauvegarder l'ID de conversation localement pour le retour
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('last_guest_conversation_id', conversationId);
+      await prefs.setString('last_guest_id', guestId);
+      await prefs.setString('last_guest_name', guestName);
+      final guestConvs = prefs.getStringList('guest_conversations') ?? [];
+      if (!guestConvs.contains(conversationId)) {
+        guestConvs.add(conversationId);
+        await prefs.setStringList('guest_conversations', guestConvs);
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -145,7 +154,9 @@ class _GuestContactScreenState extends ConsumerState<GuestContactScreen> {
             backgroundColor: AppColors.successGreen,
           ),
         );
-        context.pop();
+
+        // 4. Naviguer vers la conversation pour voir les réponses en temps réel
+        context.pushReplacement('/messages/$conversationId');
       }
     } catch (e) {
       if (mounted) {

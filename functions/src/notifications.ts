@@ -99,7 +99,7 @@ export const onNotificationCreated = functions.firestore
         data: data,
         android: {
           notification: {
-            channelId: 'miwodo_notifications',
+            channelId: 'miwodo_default',
             priority: 'high',
           },
         },

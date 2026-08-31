@@ -241,9 +241,11 @@ service cloud.firestore {
     // Conversations : lecture/écriture pour les participants ou invités
     match /conversations/{conversationId} {
       // Lecture : participant authentifié (via ID ou participants array) OU prestataire concerné par une conv invité
+      // OU invité non authentifié (conv isGuestConversation avec guestId dans l'ID)
       allow read: if (request.auth != null && isConversationParticipant(conversationId))
         || (request.auth != null && resource.data.participants is list && resource.data.participants.hasAny([request.auth.uid]))
-        || isPrestataireInGuestConv(conversationId);
+        || isPrestataireInGuestConv(conversationId)
+        || (isGuestConversation(conversationId) && resource.data.isGuestConversation == true);
       
       // Création : participant authentifié OU création publique pour invités (isGuestConversation)
       allow create: if (request.auth != null && isConversationParticipant(conversationId))
@@ -253,13 +255,17 @@ service cloud.firestore {
       allow update: if (request.auth != null && isConversationParticipant(conversationId)
         && onlyUpdating(['lastMessageLu', 'dernierMessage', 'dernierMessageDate', 'dernierExpediteurId']))
         || (isPrestataireInGuestConv(conversationId)
+          && onlyUpdating(['lastMessageLu', 'dernierMessage', 'dernierMessageDate', 'dernierExpediteurId']))
+        || (isGuestConversation(conversationId)
           && onlyUpdating(['lastMessageLu', 'dernierMessage', 'dernierMessageDate', 'dernierExpediteurId']));
 
       // Messages d'une conversation
       match /messages/{messageId} {
-        // Lecture : participant authentifié ou prestataire concerné
+        // Lecture : participant authentifié, prestataire concerné, ou invité (conv guest)
         allow read: if (request.auth != null && isConversationParticipant(conversationId))
-          || isPrestataireInGuestConv(conversationId);
+          || isPrestataireInGuestConv(conversationId)
+          || (isGuestConversation(conversationId) && exists(/databases/$(database)/documents/conversations/$(conversationId))
+              && get(/databases/$(database)/documents/conversations/$(conversationId)).data.isGuestConversation == true);
         
         // Création : participant authentifié OU invité (isGuest=true dans le message)
         allow create: if (request.auth != null && isConversationParticipant(conversationId)

@@ -985,7 +985,8 @@ class _PrestataireProfileScreenState extends ConsumerState<PrestataireProfileScr
             variant: MiwodoButtonVariant.secondary,
             onPressed: () {
               final currentUid = FirebaseService.instance.auth.currentUser?.uid ?? 'guest';
-              context.push('/messages/${p.id}_$currentUid');
+              final ids = [currentUid, p.id]..sort();
+              context.push('/messages/${ids[0]}_${ids[1]}');
             },
           ),
         ),

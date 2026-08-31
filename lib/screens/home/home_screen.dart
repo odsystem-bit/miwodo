@@ -1091,8 +1091,13 @@ class HomeScreen extends ConsumerWidget {
                                             ScaffoldMessenger.of(context).showSnackBar(
                                               SnackBar(
                                                 content: Text('${produit.nom} ajouté au panier'),
-                                                duration: const Duration(seconds: 1),
+                                                duration: const Duration(seconds: 2),
                                                 backgroundColor: AppColors.successGreen,
+                                                action: SnackBarAction(
+                                                  label: 'Voir panier',
+                                                  textColor: Colors.white,
+                                                  onPressed: () => context.push('/panier'),
+                                                ),
                                               ),
                                             );
                                           },

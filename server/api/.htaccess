@@ -13,6 +13,8 @@ RewriteRule ^verify$ verify.php [L,QSA]
 RewriteRule ^webhook$ webhook.php [L,QSA]
 RewriteRule ^upload$ upload.php [L,QSA]
 RewriteRule ^delete$ delete.php [L,QSA]
+RewriteRule ^messages$ messages.php [L,QSA]
+RewriteRule ^notifications$ notifications.php [L,QSA]
 
 # Sécurité — bloquer l'accès direct aux fichiers sensibles
 <FilesMatch "^(config|\.env)">

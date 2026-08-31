@@ -35,8 +35,8 @@ android {
     defaultConfig {
         applicationId = "com.miwodo.miwodo"
         minSdkVersion(24)
-        targetSdkVersion(34)
-        versionCode = 1
+        targetSdkVersion(35)
+        versionCode = 2
         versionName = "1.0.0"
     }
 

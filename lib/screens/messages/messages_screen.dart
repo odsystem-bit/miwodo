@@ -2,7 +2,6 @@
 import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,8 +11,9 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_colors.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/firebase_service.dart';
+import '../../services/message_api_service.dart';
 
-// Provider pour charger le nom d'un prestataire lazily
+// Provider pour charger le nom d'un prestataire lazily (Firestore pour les profils)
 final prestataireNameProvider = FutureProvider.family<({String name, String? photoUrl}), String>((ref, uid) async {
   try {
     final doc = await FirebaseService.instance.firestore.collection('prestataires').doc(uid).get();
@@ -62,28 +62,25 @@ final conversationsProvider =
         return Stream.value(<ConversationPreview>[]);
       }
 
-      // Stream principal: conversations où l'utilisateur est participant
-      // On utilise un seul stream et on filtre en mémoire pour éviter les index composites
-      return FirebaseService.instance.firestore
-          .collection('conversations')
-          .where('participants', arrayContains: uid)
-          .snapshots()
-          .map((snapshot) {
+      // Polling MySQL pour les conversations
+      return Stream.periodic(const Duration(seconds: 5), (_) => uid)
+          .asyncMap((userId) async {
         try {
+          final conversations = await MessageApiService.instance.getConversations(userId);
           final List<ConversationPreview> previews = [];
-          for (final doc in snapshot.docs) {
+          for (final conv in conversations) {
             try {
-              final data = doc.data();
-              final isGuestConv = data['isGuestConversation'] as bool? ?? false;
-              final participants = List<String>.from(data['participants'] ?? []);
+              final participants = List<String>.from(conv['participants'] ?? []);
+              final isGuestConv = (conv['is_guest_conversation'] == true || conv['is_guest_conversation'] == 1);
+              final lastMessageLu = (conv['last_message_lu'] == true || conv['last_message_lu'] == 1);
 
               String otherUserId;
               String? otherUserName;
 
               if (isGuestConv) {
-                otherUserId = data['guestId'] as String? ?? '';
-                otherUserName = data['guestName'] as String? ?? 'Invité';
-                final guestPhone = data['guestPhone'] as String?;
+                otherUserId = conv['guest_id'] as String? ?? '';
+                otherUserName = conv['guest_name'] as String? ?? 'Invité';
+                final guestPhone = conv['guest_phone'] as String?;
                 if (guestPhone != null && guestPhone.isNotEmpty) {
                   otherUserName = '$otherUserName ($guestPhone)';
                 }
@@ -95,16 +92,13 @@ final conversationsProvider =
                 otherUserName = null;
               }
 
-              final lastMessage = data['dernierMessage'] as String? ?? 'Dernier message indisponible';
-              final dernierExpediteurId = data['dernierExpediteurId'] as String? ?? '';
-              final updatedAt =
-                  (data['dernierMessageDate'] as Timestamp?)?.toDate() ?? DateTime.now();
-              final lastMessageLu = data['lastMessageLu'] as bool? ?? false;
-
+              final lastMessage = conv['dernier_message'] as String? ?? 'Dernier message indisponible';
+              final dernierExpediteurId = conv['dernier_expediteur_id'] as String? ?? '';
+              final updatedAt = _parseDate(conv['dernier_message_date']);
               final unreadCount = (!lastMessageLu && dernierExpediteurId != uid) ? 1 : 0;
 
               previews.add(ConversationPreview(
-                id: doc.id,
+                id: conv['id'] as String,
                 title: otherUserName?.isNotEmpty == true ? otherUserName! : 'Discussion',
                 lastMessage: lastMessage,
                 updatedAt: updatedAt,
@@ -116,24 +110,19 @@ final conversationsProvider =
                 isGuestConversation: isGuestConv,
               ));
             } catch (e) {
-              if (kDebugMode) print('[MessagesScreen] Error processing conversation ${doc.id}: $e');
+              if (kDebugMode) print('[MessagesScreen] Error processing conversation: $e');
             }
           }
           previews.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
           return previews;
-        } catch (e, st) {
-          if (kDebugMode) {
-            print('[MessagesScreen] conversationsProvider error: $e');
-            print(st);
-          }
+        } catch (e) {
+          if (kDebugMode) print('[MessagesScreen] conversationsProvider error: $e');
           return <ConversationPreview>[];
         }
       }).transform(
         StreamTransformer.fromHandlers(
           handleError: (error, stack, sink) {
-            if (kDebugMode) {
-              print('[MessagesScreen] conversationsProvider stream error: $error');
-            }
+            if (kDebugMode) print('[MessagesScreen] conversationsProvider stream error: $error');
             sink.add(<ConversationPreview>[]);
           },
         ),
@@ -142,6 +131,18 @@ final conversationsProvider =
 
 final searchQueryProvider = StateProvider<String>((ref) => '');
 final messageFilterProvider = StateProvider<MessageFilter>((ref) => MessageFilter.all);
+
+DateTime _parseDate(dynamic value) {
+  if (value == null) return DateTime.now();
+  if (value is String) {
+    try {
+      return DateTime.parse(value);
+    } catch (_) {
+      return DateTime.now();
+    }
+  }
+  return DateTime.now();
+}
 
 enum MessageFilter { all, unread, recent }
 

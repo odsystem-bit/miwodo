@@ -21,26 +21,31 @@ import '../core/theme/app_colors.dart';
 import '../models/message.dart';
 import '../models/prestataire.dart';
 import '../services/audio_service.dart';
-import '../services/notification_service.dart';
 import '../services/supabase_service.dart';
+import '../services/message_api_service.dart';
 import '../widgets/miwodo_svg_icon.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-// Provider pour les messages d'une conversation
+// Provider pour les messages d'une conversation (MySQL avec polling)
 final messagesProvider = StreamProvider.family<List<Message>, String>((ref, conversationId) {
-  return FirebaseFirestore.instance
-      .collection('conversations')
-      .doc(conversationId)
-      .collection('messages')
-      .orderBy('creeLe', descending: true)
-      .limit(100)
-      .snapshots()
-      .map((snap) => snap.docs.map((d) => Message.fromJson({...d.data(), 'id': d.id})).toList())
+  return Stream.periodic(const Duration(seconds: 3), (_) => conversationId)
+      .asyncMap((convId) async {
+        try {
+          final messages = await MessageApiService.instance.getMessages(convId);
+          return messages
+              .map((row) => Message.fromMySQL(row))
+              .toList()
+              .reversed
+              .toList(); // Ordre ascendant (plus récent en dernier)
+        } catch (e) {
+          if (kDebugMode) print('[Conversation] messagesProvider error: $e');
+          return <Message>[];
+        }
+      })
       .transform(
         StreamTransformer.fromHandlers(
           handleError: (error, stack, sink) {
-            if (kDebugMode) {
-              print('[Conversation] messagesProvider stream error: $error');
-            }
+            if (kDebugMode) print('[Conversation] messagesProvider stream error: $error');
             sink.add(<Message>[]);
           },
         ),
@@ -70,17 +75,66 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
   double _uploadProgress = 0;
   String? _uploadingType;
 
-  String get _currentUserId => FirebaseAuth.instance.currentUser?.uid ?? '';
-
-  String get _otherUserId {
-    final parts = widget.id.split('_');
-    return parts.firstWhere((p) => p != _currentUserId, orElse: () => parts.first);
-  }
+  String _currentUserId = '';
+  bool _isGuest = false;
 
   @override
   void initState() {
     super.initState();
+    _loadCurrentUserId();
+  }
+
+  Future<void> _loadCurrentUserId() async {
+    final firebaseUser = FirebaseAuth.instance.currentUser;
+    if (firebaseUser != null) {
+      setState(() {
+        _currentUserId = firebaseUser.uid;
+        _isGuest = false;
+      });
+    } else {
+      // Invité: récupérer le guest ID depuis SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      final guestId = prefs.getString('last_guest_id') ?? '';
+      setState(() {
+        _currentUserId = guestId;
+        _isGuest = true;
+      });
+    }
+    // Charger l'autre participant et marquer comme lu après avoir notre ID
+    _loadOtherUserId();
     _markAsRead();
+  }
+
+  String? _cachedOtherUserId;
+
+  String get _otherUserId {
+    if (_cachedOtherUserId != null) return _cachedOtherUserId!;
+    // Fallback: extraire depuis l'ID de conversation
+    final parts = widget.id.split('_');
+    if (parts.length == 2) {
+      _cachedOtherUserId = parts.firstWhere((p) => p != _currentUserId, orElse: () => parts.first);
+      return _cachedOtherUserId!;
+    }
+    // Pour les conversations invité (guest_phone_prestataireId)
+    _cachedOtherUserId = parts.last;
+    return _cachedOtherUserId!;
+  }
+
+  Future<void> _loadOtherUserId() async {
+    try {
+      final convData = await MessageApiService.instance.getConversation(widget.id);
+      if (convData != null) {
+        final participants = List<String>.from(convData['participants'] ?? []);
+        final other = participants.where((p) => p != _currentUserId).toList();
+        if (other.isNotEmpty) {
+          setState(() {
+            _cachedOtherUserId = other.first;
+          });
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) print('[Conversation] Error loading other user ID: $e');
+    }
   }
 
   @override
@@ -91,26 +145,15 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
   }
 
   Future<void> _markAsRead() async {
-    final batch = FirebaseFirestore.instance.batch();
-    final unread = await FirebaseFirestore.instance
-        .collection('conversations')
-        .doc(widget.id)
-        .collection('messages')
-        .where('destinataireId', isEqualTo: _currentUserId)
-        .where('estLu', isEqualTo: false)
-        .get();
-
-    for (final doc in unread.docs) {
-      batch.update(doc.reference, {'estLu': true});
+    if (_currentUserId.isEmpty) return;
+    try {
+      await MessageApiService.instance.markAsRead(
+        conversationId: widget.id,
+        userId: _currentUserId,
+      );
+    } catch (e) {
+      if (kDebugMode) print('[Conversation] markAsRead error: $e');
     }
-
-    // Marquer la conversation comme lue
-    batch.update(
-      FirebaseFirestore.instance.collection('conversations').doc(widget.id),
-      {'lastMessageLu': true},
-    );
-
-    await batch.commit();
   }
 
   @override
@@ -480,48 +523,47 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
     int? mediaSizeBytes,
     int? mediaDurationSeconds,
   }) async {
-    final msgData = {
-      'expediteurId': _currentUserId,
-      'destinataireId': _otherUserId,
-      'contenu': contenu,
-      'type': type.name,
-      'mediaUrl': mediaUrl,
-      'mediaSizeBytes': mediaSizeBytes,
-      'mediaDurationSeconds': mediaDurationSeconds,
-      'estLu': false,
-      'creeLe': FieldValue.serverTimestamp(),
-    };
+    final otherId = _otherUserId;
 
-    // Créer/mettre à jour la conversation
-    final convRef = FirebaseFirestore.instance.collection('conversations').doc(widget.id);
-    await convRef.set({
-      'participants': [_currentUserId, _otherUserId],
-      'dernierMessage': contenu,
-      'dernierMessageDate': FieldValue.serverTimestamp(),
-      'dernierExpediteurId': _currentUserId,
-      'lastMessageLu': false,
-    }, SetOptions(merge: true));
+    // 1. Envoyer le message vers MySQL
+    await MessageApiService.instance.sendMessage(
+      conversationId: widget.id,
+      expediteurId: _currentUserId,
+      destinataireId: otherId,
+      contenu: contenu,
+      type: type.name,
+      mediaUrl: mediaUrl,
+      mediaSizeBytes: mediaSizeBytes,
+      mediaDurationSeconds: mediaDurationSeconds,
+      isGuest: _isGuest,
+    );
 
-    // Ajouter le message
-    await convRef.collection('messages').add(msgData);
-
-    // Créer une notification Firestore pour le destinataire
+    // 2. Notifier le destinataire (MySQL)
     try {
-      final senderDoc = await FirebaseFirestore.instance
-          .collection('prestataires')
-          .doc(_currentUserId)
-          .get();
-      final senderName = senderDoc.exists
-          ? '${senderDoc.data()?['prenom'] ?? ''} ${senderDoc.data()?['nom'] ?? ''}'.trim()
-          : 'Utilisateur';
-      await NotificationService.instance.notifyNewMessage(
-        recipientId: _otherUserId,
-        senderName: senderName.isEmpty ? 'Utilisateur' : senderName,
-        messagePreview: contenu,
-        conversationId: widget.id,
+      String senderName = 'Utilisateur';
+      if (!_isGuest) {
+        final senderDoc = await FirebaseFirestore.instance
+            .collection('prestataires')
+            .doc(_currentUserId)
+            .get();
+        if (senderDoc.exists) {
+          senderName = '${senderDoc.data()?['prenom'] ?? ''} ${senderDoc.data()?['nom'] ?? ''}'.trim();
+          if (senderName.isEmpty) senderName = 'Utilisateur';
+        }
+      } else {
+        final prefs = await SharedPreferences.getInstance();
+        senderName = prefs.getString('last_guest_name') ?? 'Invité';
+      }
+
+      await MessageApiService.instance.createNotification(
+        userId: otherId,
+        title: senderName,
+        body: contenu,
+        type: 'message',
+        targetId: widget.id,
       );
     } catch (e) {
-      // Silent fail — notification is best-effort
+      if (kDebugMode) print('[Conversation] Notification error: $e');
     }
   }
 
