@@ -315,7 +315,9 @@ final GoRouter appRouter = GoRouter(
     GoRoute(
       parentNavigatorKey: _rootNavigatorKey,
       path: '/inscription',
-      builder: (context, state) => const InscriptionScreen(),
+      builder: (context, state) => InscriptionScreen(
+        initialReferralCode: state.uri.queryParameters['ref'],
+      ),
     ),
     GoRoute(
       parentNavigatorKey: _rootNavigatorKey,
