@@ -1,0 +1,14 @@
+stages:
+  - build
+
+build_apk:
+  stage: build
+  image: flutter:stable
+  before_script:
+    - flutter pub get
+  script:
+    - flutter build apk --release --target-platform android-arm64
+  artifacts:
+    paths:
+      - build/app/outputs/flutter-apk/app-release.apk
+    expire_in: 30 days

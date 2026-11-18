@@ -1,0 +1,14 @@
+image: flutter:stable
+
+pipelines:
+  default:
+    - step:
+        name: Build APK
+        caches:
+          - gradle
+          - flutter
+        script:
+          - flutter pub get
+          - flutter build apk --release --target-platform android-arm64
+        artifacts:
+          - build/app/outputs/flutter-apk/app-release.apk
