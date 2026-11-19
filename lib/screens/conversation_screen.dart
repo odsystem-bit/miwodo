@@ -82,11 +82,21 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
 
   String _currentUserId = '';
   bool _isGuest = false;
+  String? _guestPeerName;
+  String? _guestPeerPhone;
+
+  // États pour l'enregistrement vocal
+  bool _isRecordingAudio = false;
+  int _recordSeconds = 0;
+  Timer? _recordTimer;
 
   @override
   void initState() {
     super.initState();
     _loadCurrentUserId();
+    _messageController.addListener(() {
+      if (mounted) setState(() {});
+    });
   }
 
   Future<void> _loadCurrentUserId() async {
@@ -140,9 +150,19 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
       if (convData != null) {
         final participants = List<String>.from(convData['participants'] ?? []);
         final other = participants.where((p) => p != _currentUserId).toList();
-        if (other.isNotEmpty) {
+        final gName = convData['guest_name'] as String?;
+        final gPhone = convData['guest_phone'] as String?;
+        if (mounted) {
           setState(() {
-            _cachedOtherUserId = other.first;
+            if (other.isNotEmpty) {
+              _cachedOtherUserId = other.first;
+            }
+            if (gName != null && gName.isNotEmpty) {
+              _guestPeerName = gName;
+            }
+            if (gPhone != null && gPhone.isNotEmpty) {
+              _guestPeerPhone = gPhone;
+            }
           });
         }
       }
@@ -153,6 +173,10 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
 
   @override
   void dispose() {
+    _recordTimer?.cancel();
+    if (_isRecordingAudio) {
+      AudioRecorderService.instance.cancelRecording();
+    }
     _messageController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -186,38 +210,74 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
         ),
         title: destinataireAsync.when(
           loading: () => const Text('...'),
-          error: (e, st) => const Text('Conversation'),
-          data: (dest) => dest == null
-              ? const Text('Conversation')
-              : Row(
+          error: (e, st) => Text(_guestPeerName ?? 'Conversation'),
+          data: (dest) {
+            if (dest == null) {
+              if (_guestPeerName != null && _guestPeerName!.isNotEmpty) {
+                return Row(
                   children: [
                     CircleAvatar(
                       radius: 18,
-                      backgroundImage: dest.photoUrl != null ? CachedNetworkImageProvider(dest.photoUrl!) : null,
                       backgroundColor: AppColors.primaryOrangeLight,
-                      child: dest.photoUrl == null ? Text(dest.prenom[0], style: const TextStyle(color: AppColors.primaryOrange)) : null,
+                      child: Text(
+                        _guestPeerName![0].toUpperCase(),
+                        style: const TextStyle(color: AppColors.primaryOrange, fontWeight: FontWeight.w700),
+                      ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('${dest.prenom} ${dest.nom}', style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
-                          Text(dest.categorie, style: GoogleFonts.inter(fontSize: 11, color: AppColors.textSecondary)),
+                          Text(
+                            _guestPeerName!,
+                            style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+                          ),
+                          Text(
+                            _guestPeerPhone != null ? 'Client ($_guestPeerPhone)' : 'Client Invité',
+                            style: GoogleFonts.inter(fontSize: 11, color: AppColors.textSecondary),
+                          ),
                         ],
                       ),
                     ),
                   ],
+                );
+              }
+              return const Text('Conversation');
+            }
+            return Row(
+              children: [
+                CircleAvatar(
+                  radius: 18,
+                  backgroundImage: dest.photoUrl != null ? CachedNetworkImageProvider(dest.photoUrl!) : null,
+                  backgroundColor: AppColors.primaryOrangeLight,
+                  child: dest.photoUrl == null ? Text(dest.prenom[0], style: const TextStyle(color: AppColors.primaryOrange)) : null,
                 ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('${dest.prenom} ${dest.nom}', style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+                      Text(dest.categorie, style: GoogleFonts.inter(fontSize: 11, color: AppColors.textSecondary)),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
         ),
         actions: [
           destinataireAsync.whenOrNull(
-            data: (dest) => dest != null
-                ? IconButton(
-                    icon: const MiwodoSvgIcon('assets/icons/ic_phone.svg', size: 22, color: AppColors.primaryOrange),
-                    onPressed: () => _callPrestataire(dest.telephone),
-                  )
-                : null,
+            data: (dest) {
+              final tel = dest?.telephone ?? _guestPeerPhone;
+              if (tel == null || tel.trim().isEmpty) return null;
+              return IconButton(
+                tooltip: 'Appeler',
+                icon: const MiwodoSvgIcon('assets/icons/ic_phone.svg', size: 22, color: AppColors.primaryOrange),
+                onPressed: () => _callPrestataire(tel),
+              );
+            },
           ) ?? const SizedBox.shrink(),
         ],
       ),
@@ -340,6 +400,89 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
   }
 
   Widget _buildInputBar() {
+    if (_isRecordingAudio) {
+      final mins = (_recordSeconds ~/ 60).toString().padLeft(2, '0');
+      final secs = (_recordSeconds % 60).toString().padLeft(2, '0');
+      return Container(
+        padding: EdgeInsets.only(
+          left: 12,
+          right: 12,
+          top: 10,
+          bottom: MediaQuery.of(context).padding.bottom + 10,
+        ),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(top: BorderSide(color: AppColors.borderGray)),
+        ),
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: 'Annuler',
+              onPressed: _cancelVoiceRecording,
+              icon: const Icon(Icons.delete_outline, color: AppColors.errorRed, size: 26),
+            ),
+            const SizedBox(width: 6),
+            Container(
+              width: 10,
+              height: 10,
+              decoration: const BoxDecoration(
+                color: AppColors.errorRed,
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              '$mins:$secs',
+              style: GoogleFonts.inter(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textPrimary,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Enregistrement vocal en cours...',
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: _stopAndSendVoiceRecording,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryOrange,
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.send, color: Colors.white, size: 18),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Envoyer',
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final hasText = _messageController.text.trim().isNotEmpty;
+
     return Container(
       padding: EdgeInsets.only(
         left: 8,
@@ -361,6 +504,7 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
               const PopupMenuItem(value: 'image', child: Row(children: [Icon(Icons.image_outlined, size: 20), SizedBox(width: 8), Text('Photo')])),
               const PopupMenuItem(value: 'camera', child: Row(children: [Icon(Icons.camera_alt_outlined, size: 20), SizedBox(width: 8), Text('Caméra')])),
               const PopupMenuItem(value: 'video', child: Row(children: [Icon(Icons.videocam_outlined, size: 20), SizedBox(width: 8), Text('Vidéo')])),
+              const PopupMenuItem(value: 'audio', child: Row(children: [Icon(Icons.mic_none_outlined, size: 20, color: AppColors.primaryOrange), SizedBox(width: 8), Text('Message vocal')])),
             ],
           ),
 
@@ -382,42 +526,105 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
           ),
           const SizedBox(width: 8),
 
-          // Bouton micro (désactivé temporairement - audio non fonctionnel)
-          // if (_messageController.text.trim().isEmpty) ...[
-          //   GestureDetector(
-          //     onTap: _startRecording,
-          //     child: Container(
-          //       padding: const EdgeInsets.all(10),
-          //       decoration: BoxDecoration(
-          //         color: AppColors.surfaceGray,
-          //         shape: BoxShape.circle,
-          //       ),
-          //       child: const Icon(Icons.mic, color: AppColors.primaryOrange, size: 22),
-          //     ),
-          //   ),
-          //   const SizedBox(width: 8),
-          // ],
-
-          // Bouton envoyer
-          GestureDetector(
-            onTap: _isSending ? null : _sendTextMessage,
-            child: Container(
-              padding: const EdgeInsets.all(10),
-              decoration: const BoxDecoration(
-                color: AppColors.primaryOrange,
-                shape: BoxShape.circle,
+          // Bouton micro (message vocal) quand le champ texte est vide
+          if (!hasText) ...[
+            GestureDetector(
+              onTap: _isSending ? null : _startVoiceRecording,
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryOrangeLight,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.mic, color: AppColors.primaryOrange, size: 22),
               ),
-              child: _isSending
-                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Icon(Icons.send, color: Colors.white, size: 20),
             ),
-          ),
+            const SizedBox(width: 6),
+          ],
+
+          // Bouton envoyer texte
+          if (hasText || _isSending)
+            GestureDetector(
+              onTap: _isSending ? null : _sendTextMessage,
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: const BoxDecoration(
+                  color: AppColors.primaryOrange,
+                  shape: BoxShape.circle,
+                ),
+                child: _isSending
+                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.send, color: Colors.white, size: 20),
+              ),
+            ),
         ],
       ),
     );
   }
 
+  Future<void> _startVoiceRecording() async {
+    try {
+      await AudioPlayerService.instance.stop();
+      final path = await AudioRecorderService.instance.startRecording();
+      if (path != null && mounted) {
+        _recordTimer?.cancel();
+        setState(() {
+          _isRecordingAudio = true;
+          _recordSeconds = 0;
+        });
+        _recordTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+          if (mounted) {
+            setState(() => _recordSeconds++);
+          }
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Impossible de démarrer le micro : $e'),
+            backgroundColor: AppColors.errorRed,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _cancelVoiceRecording() async {
+    _recordTimer?.cancel();
+    await AudioRecorderService.instance.cancelRecording();
+    if (mounted) {
+      setState(() {
+        _isRecordingAudio = false;
+        _recordSeconds = 0;
+      });
+    }
+  }
+
+  Future<void> _stopAndSendVoiceRecording() async {
+    _recordTimer?.cancel();
+    final recorded = await AudioRecorderService.instance.stopRecording();
+    if (mounted) {
+      setState(() {
+        _isRecordingAudio = false;
+        _recordSeconds = 0;
+      });
+    }
+    if (recorded == null) return;
+    final sizeBytes = await recorded.file.length();
+    await _sendMediaMessage(
+      recorded.file,
+      MessageType.audio,
+      sizeBytes,
+      durationSeconds: recorded.durationSeconds,
+    );
+  }
+
   Future<void> _handleMediaSelection(String type) async {
+    if (type == 'audio') {
+      await _startVoiceRecording();
+      return;
+    }
     final picker = ImagePicker();
     XFile? picked;
 
@@ -492,11 +699,16 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
       final path = 'messages/${widget.id}/$fileName';
       String? url;
       try {
+        final contentType = type == MessageType.video
+            ? 'video/mp4'
+            : type == MessageType.audio
+                ? 'audio/mp4'
+                : 'image/jpeg';
         url = await SupabaseService.uploadPhoto(
           bucket: 'miwodo-photos',
           path: path,
           file: file,
-          contentType: type == MessageType.video ? 'video/mp4' : 'image/jpeg',
+          contentType: contentType,
         );
       } catch (e) {
         if (mounted) {
@@ -508,7 +720,7 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
       }
 
       await _sendMessage(
-        contenu: type == MessageType.image ? '📷 Photo' : type == MessageType.video ? '🎥 Vidéo' : '🎵 Audio',
+        contenu: type == MessageType.image ? '📷 Photo' : type == MessageType.video ? '🎥 Vidéo' : '🎤 Message vocal',
         type: type,
         mediaUrl: url,
         mediaSizeBytes: sizeBytes,
@@ -582,9 +794,18 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
   }
 
   Future<void> _callPrestataire(String telephone) async {
-    final uri = Uri.parse('tel:$telephone');
-    if (await canLaunchUrl(uri)) {
+    final cleaned = telephone.trim().replaceAll(' ', '');
+    if (cleaned.isEmpty) return;
+    final normalized = cleaned.startsWith('+') ? cleaned : '+228$cleaned';
+    final uri = Uri(scheme: 'tel', path: normalized);
+    try {
       await launchUrl(uri);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Impossible de lancer l'appel")),
+        );
+      }
     }
   }
 }
@@ -669,7 +890,11 @@ class _MessageBubble extends StatelessWidget {
                   // Média
                   if (message.hasMedia) ...[
                     _buildMediaContent(context),
-                    if (message.contenu.isNotEmpty && !message.contenu.startsWith('📷') && !message.contenu.startsWith('🎥'))
+                    if (message.contenu.isNotEmpty &&
+                        !message.contenu.startsWith('📷') &&
+                        !message.contenu.startsWith('🎥') &&
+                        !message.contenu.startsWith('🎤') &&
+                        !message.contenu.startsWith('🎵'))
                       Padding(
                         padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
                         child: Text(

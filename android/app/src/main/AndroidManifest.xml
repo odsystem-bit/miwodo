@@ -19,6 +19,9 @@
     <!-- Caméra pour photos/vidéos -->
     <uses-permission android:name="android.permission.CAMERA" />
     
+    <!-- Microphone pour messages vocaux -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    
     <application
         android:label="miwodo"
         android:name="${applicationName}"
