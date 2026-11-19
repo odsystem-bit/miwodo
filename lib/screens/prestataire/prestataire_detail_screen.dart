@@ -18,6 +18,7 @@ import '../../models/avis.dart';
 import '../../models/prestataire.dart';
 import '../../models/service_prestataire.dart';
 import '../../models/signalement.dart';
+import '../../services/app_rating_service.dart';
 import '../../services/firestore_service.dart';
 import '../../services/firebase_service.dart';
 import '../../widgets/badge_verifie.dart';
@@ -277,6 +278,13 @@ class PrestataireDetailScreen extends ConsumerWidget {
                       final uri = Uri(scheme: 'tel', path: normalized);
                       try {
                         await launchUrl(uri);
+                        if (context.mounted) {
+                          await AppRatingService.instance.recordPositiveActionAndPromptIfEligible(
+                            context,
+                            source: 'appel_artisan_${prestataire.id}',
+                            threshold: 2,
+                          );
+                        }
                       } catch (e) {
                         messenger.showSnackBar(const SnackBar(content: Text("Impossible de lancer l'appel")));
                       }

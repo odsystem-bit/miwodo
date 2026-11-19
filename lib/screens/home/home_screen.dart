@@ -22,6 +22,8 @@ import '../../providers/pays_provider.dart';
 import '../../services/firestore_service.dart';
 import '../../services/firebase_service.dart';
 import '../../services/sponsoring_service.dart';
+import '../../services/app_rating_service.dart';
+import '../../widgets/miwodo_rating_card.dart';
 import '../../widgets/miwodo_svg_icon.dart';
 import '../../widgets/star_rating.dart';
 import '../commander/commande_providers.dart';
@@ -285,6 +287,12 @@ class HomeScreen extends ConsumerWidget {
           _buildNewPrestatairesSection(context, filteredPrestataires),
           if (showDevenirPrestataire) _buildDevenirPrestataireCard(context),
           _buildReferralBanner(context),
+          const SliverToBoxAdapter(
+            child: MiwodoRatingCard(
+              source: 'accueil_banniere',
+              margin: EdgeInsets.fromLTRB(16, 12, 16, 0),
+            ),
+          ),
           const SliverToBoxAdapter(child: SizedBox(height: 24)),
         ],
       ),
@@ -1816,7 +1824,9 @@ class _HomeHeroCarouselState extends State<_HomeHeroCarousel> {
   void _onBannerTap(_HeroBannerItem item) {
     final route = item.actionUrl?.trim();
     if (route != null && route.isNotEmpty) {
-      if (route.startsWith('/')) {
+      if (route == '/noter' || route == 'noter' || route == 'playstore') {
+        AppRatingService.instance.showRatingDialog(context, source: 'banniere_admin');
+      } else if (route.startsWith('/')) {
         context.push(route);
       }
     }
@@ -1912,7 +1922,9 @@ class _HomeHeroCarouselState extends State<_HomeHeroCarousel> {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: GestureDetector(
               onTap: () {
-                if (_alertLink != null && _alertLink!.startsWith('/')) {
+                if (_alertLink == '/noter' || _alertLink == 'noter' || _alertLink == 'playstore') {
+                  AppRatingService.instance.showRatingDialog(context, source: 'ruban_admin');
+                } else if (_alertLink != null && _alertLink!.startsWith('/')) {
                   context.push(_alertLink!);
                 }
               },

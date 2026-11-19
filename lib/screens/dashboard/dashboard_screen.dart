@@ -12,11 +12,13 @@ import '../../models/demande_retrait.dart';
 import '../../models/prestataire.dart';
 import '../../providers/pays_provider.dart';
 import '../../services/auth_service.dart';
+import '../../services/app_rating_service.dart';
 import '../../services/firebase_service.dart';
 import '../../services/firestore_service.dart';
 import '../../services/retrait_service.dart';
 import '../../widgets/livreur_courses_widget.dart';
 import '../../widgets/miwodo_button.dart';
+import '../../widgets/miwodo_rating_card.dart';
 import '../../widgets/miwodo_svg_icon.dart';
 
 class DashboardScreen extends ConsumerStatefulWidget {
@@ -59,6 +61,13 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen>
         });
         if (p != null) {
           _tabController = TabController(length: 6, vsync: this);
+          if (mounted) {
+            AppRatingService.instance.recordPositiveActionAndPromptIfEligible(
+              context,
+              source: 'dashboard_prestataire',
+              threshold: 3,
+            );
+          }
         }
       }
     } catch (_) {
@@ -143,6 +152,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen>
                 fullWidth: true,
                 variant: MiwodoButtonVariant.secondary,
               ),
+              const SizedBox(height: 24),
+              const MiwodoRatingCard(source: 'compte_invite'),
             ],
           ),
         ),
@@ -637,8 +648,29 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen>
           ],
         ),
         const SizedBox(height: 16),
+        const MiwodoRatingCard(source: 'dashboard_overview'),
+        const SizedBox(height: 16),
         // Section Paramètres & Suppression de compte (Google Play Compliance)
         _buildInfoCard('Sécurité & Compte', [
+          ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.star_rounded, size: 20, color: AppColors.primaryOrange),
+            title: Text(
+              'Noter MIWODO sur Google Play',
+              style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+            subtitle: Text(
+              'Laissez-nous 5 étoiles pour soutenir la communauté',
+              style: GoogleFonts.inter(fontSize: 11, color: AppColors.textSecondary),
+            ),
+            trailing: const Icon(Icons.chevron_right, size: 18),
+            onTap: () => AppRatingService.instance.showRatingDialog(
+              context,
+              source: 'menu_securite_compte',
+            ),
+          ),
+          const Divider(height: 1),
           ListTile(
             dense: true,
             contentPadding: EdgeInsets.zero,

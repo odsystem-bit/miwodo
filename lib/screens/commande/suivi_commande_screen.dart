@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../models/commande.dart';
+import '../../services/app_rating_service.dart';
 import '../../services/commande_vendeur_service.dart';
 import '../../widgets/miwodo_button.dart';
 
@@ -618,6 +619,10 @@ class _ConfirmationClientCard extends ConsumerWidget {
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('Réception confirmée !'), backgroundColor: AppColors.successGreen),
+                );
+                await AppRatingService.instance.showRatingDialog(
+                  context,
+                  source: 'commande_livree_${commande.numero}',
                 );
               }
             },
